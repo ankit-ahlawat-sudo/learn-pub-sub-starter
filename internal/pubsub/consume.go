@@ -3,8 +3,16 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+)
+
+type SimpleQueueType string
+
+const (
+	Durable SimpleQueueType = "durable"
+	Transient SimpleQueueType = "transient"
 )
 
 func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
@@ -19,12 +27,38 @@ func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 	})
 }
 
-type SimpleQueueType string
+func SubscribeJSON[T any](
+	conn *amqp.Connection,
+	exchange, 
+	queueName, 
+	key string, 
+	queueType SimpleQueueType, 
+	handler func(T),
+) error {
+	ch, queue, err:= DeclareAndBind(conn, exchange, queueName, key, queueType)
 
-const (
-	Durable SimpleQueueType = "durable"
-	Transient SimpleQueueType = "transient"
-)
+	deliveryCh, err := ch.Consume(queue.Name, "", false, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("Not able to create delivery Channel: %+v", err)
+	}
+
+	go func () {
+		defer ch.Close()
+		for delivery := range deliveryCh {
+			var dat T
+			err:= json.Unmarshal(delivery.Body, &dat) 
+			if err != nil {
+				fmt.Printf("not able to unmarshal JSON: %v", err)
+				continue
+			}
+			handler(dat)
+			delivery.Ack(false)
+		}
+	} ()
+	
+	return nil
+}
+
 
 func DeclareAndBind(
 	conn *amqp.Connection,
